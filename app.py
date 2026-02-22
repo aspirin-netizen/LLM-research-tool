@@ -85,11 +85,3 @@ if prompt := st.chat_input("在此输入内容..."):
         conn.create(data=ai_row)
     except:
         pass
-# 诊断代码（可放在 st.title 之后）
-if st.button("查看我可用的模型列表"):
-    try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        for m in genai.list_models():
-            st.write(f"可用模型: {m.name}")
-    except Exception as e:
-        st.error(f"无法获取模型列表: {e}")
