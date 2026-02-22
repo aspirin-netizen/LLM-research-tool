@@ -37,12 +37,16 @@ else:
     st.warning("API Key 尚未配置。")
 
 # --- 5. 聊天记录管理 ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# 修改后的初始化部分
+if "GEMINI_API_KEY" in st.secrets:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    # 尝试使用最稳定的名称
+    model = genai.GenerativeModel(
+        model_name='gemini-1.5-flash-latest', 
+        system_instruction=SYSTEM_PROMPT
+    )
+else:
+    st.warning("API Key 尚未配置。")
 
 # --- 6. 核心：互动与实时存数据 ---
 if prompt := st.chat_input("在此输入内容..."):
@@ -81,3 +85,11 @@ if prompt := st.chat_input("在此输入内容..."):
         conn.create(data=ai_row)
     except:
         pass
+# 诊断代码（可放在 st.title 之后）
+if st.button("查看我可用的模型列表"):
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        for m in genai.list_models():
+            st.write(f"可用模型: {m.name}")
+    except Exception as e:
+        st.error(f"无法获取模型列表: {e}")
