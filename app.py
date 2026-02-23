@@ -3,36 +3,34 @@ import google.generativeai as genai
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
-import traceback
 
-# --- 1. 实验平台基础配置 ---
-st.set_page_config(page_title="人机协作实证平台", layout="centered")
+# 页面基础配置
+st.set_page_config(page_title="语言协作实证平台", layout="centered")
 student_id = st.query_params.get("id", "Unknown_Student")
 
 st.title("🎓 语言学习与人机协作研究")
 st.markdown(f"**参与者编号：** `{student_id}`")
 st.divider()
 
-# --- 2. 核心修复：手动构建并修正数据库连接 ---
-@st.cache_resource
-def get_db_connection():
-    # 从 Secrets 获取原始数据
-    secrets_dict = dict(st.secrets["connections"]["gsheets"])
-    # 【核心修复】：将粘贴过程中可能产生的错误转义字符强行修正为标准换行符
-    # 彻底解决 "short data" 和 "Unable to load PEM file" 报错
-    raw_key = secrets_dict.get("private_key", "")
-    fixed_key = raw_key.replace("\\n", "\n").strip()
-    secrets_dict["private_key"] = fixed_key
-    
-    # 使用修正后的字典建立连接
-    return st.connection("gsheets", type=GSheetsConnection, **secrets_dict)
+# --- 核心：数据库连接初始化 ---
+# 预定义 conn 为 None，防止出现 NameError
+conn = None
 
 try:
-    conn = get_db_connection()
+    if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        # 获取 Secrets 字典并深度清洗私钥中的反斜杠
+        secrets_dict = dict(st.secrets["connections"]["gsheets"])
+        raw_key = secrets_dict.get("private_key", "")
+        # 将文本形式的 \n 转换为真实的换行符，这是解决所有 PEM 报错的关键
+        fixed_key = raw_key.replace("\\n", "\n").strip()
+        secrets_dict["private_key"] = fixed_key
+        
+        # 建立连接
+        conn = st.connection("gsheets", type=GSheetsConnection, **secrets_dict)
 except Exception as e:
-    st.error(f"数据库认证失败，请检查 Secrets 配置。详情: {e}")
+    st.error(f"⚠️ 数据库初始化失败，请核对 Secrets 格式。详情: {e}")
 
-# --- 3. 配置 2026 旗舰模型 Gemini 3 Flash ---
+# --- 配置 AI 模型 (2026 旗舰版) ---
 if "GEMINI_API_KEY" in st.secrets:
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -41,9 +39,9 @@ if "GEMINI_API_KEY" in st.secrets:
             system_instruction="你是一位专业的口译导师。请针对译文的逻辑、术语及表达地道度提供反馈。"
         )
     except Exception as e:
-        st.error(f"AI 模型初始化失败: {e}")
+        st.error(f"模型配置失败: {e}")
 
-# --- 4. 互动与自动存证逻辑 ---
+# 对话状态管理
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
@@ -51,6 +49,7 @@ for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
+# 互动逻辑
 if prompt := st.chat_input("在此输入您的翻译练习内容..."):
     st.session_state["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -58,26 +57,27 @@ if prompt := st.chat_input("在此输入您的翻译练习内容..."):
 
     with st.chat_message("assistant"):
         try:
-            # 呼叫 AI
+            # AI 响应
             response = model.generate_content(prompt)
             ai_reply = response.text
             st.markdown(ai_reply)
             st.session_state["messages"].append({"role": "assistant", "content": ai_reply})
             
-            # 存入 Google Sheets (严格匹配您的表头: Timestamp, Student_ID, Input, Output)
-            try:
-                new_row = pd.DataFrame([{
-                    "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Student_ID": student_id,
-                    "Input": prompt,
-                    "Output": ai_reply
-                }])
-                conn.create(data=new_row)
-                st.toast("✅ 数据已同步至云端语料库", icon='💾')
-            except Exception:
-                st.error("⚠️ 协作数据同步失败")
-                with st.expander("查看底层报错（用于协助排查）"):
-                    st.code(traceback.format_exc())
+            # 安全写入逻辑：只有当 conn 成功创建时才尝试写入，防止崩溃
+            if conn is not None:
+                try:
+                    new_row = pd.DataFrame([{
+                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Student_ID": student_id,
+                        "Input": prompt,
+                        "Output": ai_reply
+                    }])
+                    conn.create(data=new_row)
+                    st.toast("✅ 数据已同步至云端语料库", icon='💾')
+                except Exception as sheet_err:
+                    st.error(f"写入表格失败: {sheet_err}")
+            else:
+                st.warning("⚠️ 数据库连接未就绪，本次对话仅在本地显示，无法存档。")
                     
         except Exception as e:
-            st.error(f"AI 响应异常: {e}")
+            st.error(f"AI 呼叫异常: {e}")
