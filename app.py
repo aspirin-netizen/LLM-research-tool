@@ -5,71 +5,70 @@ import pandas as pd
 from datetime import datetime
 import traceback
 
-# --- 1. 页面基础配置 ---
-st.set_page_config(page_title="语言协作研究平台", layout="centered")
+# --- 1. 页面配置与受试者 ID 获取 ---
+st.set_page_config(page_title="人机协作实证研究平台", layout="centered")
 
-# 获取学生 ID (用于您的 8 周实验语料分类)
+# 获取参数 ?id=XXX，用于 8 周实验的数据追踪
 student_id = st.query_params.get("id", "Unknown_Student")
 
 st.title("🎓 语言学习与人机协作研究")
-st.markdown(f"**当前参与者：** {student_id}")
+st.markdown(f"**参与者编号：** `{student_id}`")
 st.divider()
 
-# --- 2. 实验系统指令 ---
+# --- 2. 实验核心变量 (System Instruction) ---
 SYSTEM_PROMPT = """
 你是一位专业的口译导师。
-1. 请针对译文的逻辑、术语和地道度提供反馈。
-2. 鼓励学生在协作中提出见解。
+1. 请针对学生译文的逻辑、术语及表达地道度提供即时反馈。
+2. 鼓励学生对 AI 的建议进行批判性思考，以提升其在算法中介下的互动胜任力。
 """
 
-# --- 3. 状态初始化 ---
+# --- 3. 初始化对话状态 ---
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-# --- 4. 配置数据库与 AI 模型 ---
+# --- 4. 初始化数据库连接与 AI 模型 ---
 try:
     # 建立 Google Sheets 连接
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error(f"数据库初始化失败: {e}")
+    st.error(f"数据库初始化失败，请检查 Secrets 配置: {e}")
 
 if "GEMINI_API_KEY" in st.secrets:
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        # 使用 2026 年最新旗舰模型
+        # 使用 2026 年最新旗舰模型 Gemini 3 Flash
         model = genai.GenerativeModel(
             model_name='models/gemini-3-flash-preview', 
             system_instruction=SYSTEM_PROMPT
         )
     except Exception as e:
-        st.error(f"模型配置失败: {e}")
+        st.error(f"AI 模型启动失败: {e}")
 else:
     st.warning("API Key 未配置。")
 
-# --- 5. 渲染聊天历史 ---
+# --- 5. 渲染历史记录 ---
 for message in st.session_state["messages"]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- 6. 核心互动逻辑：对话与自动存证 ---
-if prompt := st.chat_input("在此输入翻译内容..."):
+# --- 6. 核心互动逻辑 ---
+if prompt := st.chat_input("请在此输入您的翻译内容..."):
     # 记录学生输入
     st.session_state["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 获取 AI 回复
+    # 呼叫 AI 获取协作反馈
     with st.chat_message("assistant"):
         try:
-            # 调用 AI
             response = model.generate_content(prompt)
             ai_reply = response.text
             st.markdown(ai_reply)
             st.session_state["messages"].append({"role": "assistant", "content": ai_reply})
             
-            # --- 自动存证区：写入 Google Sheets ---
+            # --- 自动存证：将协作语料写入 Google Sheets ---
             try:
-                # 构造符合您表格表头的数据
+                # 按照您设定的表头：Timestamp, Student_ID, Input, Output
                 new_row = pd.DataFrame([{
                     "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "Student_ID": student_id,
@@ -77,15 +76,15 @@ if prompt := st.chat_input("在此输入翻译内容..."):
                     "Output": ai_reply
                 }])
                 
-                # 写入表格
+                # 执行写入操作
                 conn.create(data=new_row)
-                st.toast("💾 数据已成功同步至 Google Sheet", icon='✅')
+                st.toast("💾 协作数据已成功同步至后台", icon='✅')
                 
             except Exception:
-                # 记录详细的写入报错
-                st.error("⚠️ 写入表格失败！")
-                with st.expander("点击查看详细报错详情 (排查私钥格式)"):
+                # 若写入失败，显示详细报错以供排查私钥格式
+                st.error("⚠️ 语料自动同步失败")
+                with st.expander("查看底层报错（用于排查私钥格式）"):
                     st.code(traceback.format_exc())
                 
         except Exception as ai_err:
-            st.error(f"AI 呼叫失败: {ai_err}")
+            st.error(f"AI 响应中断: {ai_err}")
