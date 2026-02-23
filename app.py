@@ -65,7 +65,7 @@ if prompt := st.chat_input("在此输入内容..."):
             st.markdown(ai_reply)
             st.session_state["messages"].append({"role": "assistant", "content": ai_reply})
             
-            # 2. 尝试将数据存入 Google Sheets
+    # 2. 尝试将数据存入 Google Sheets
             try:
                 new_row = pd.DataFrame([{
                     "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -74,8 +74,13 @@ if prompt := st.chat_input("在此输入内容..."):
                     "Output": ai_reply
                 }])
                 conn.create(data=new_row)
+                st.toast("✅ 数据已同步至 Google Sheet")
             except Exception as e:
-                st.caption(f"数据记录提醒: {e}")
+                # 使用 st.error 并加上详细的 str(e) 来查看具体病因
+                st.error(f"⚠️ 写入失败！具体原因：{str(e)}")
+                # 额外打印一下，看看是不是 Service Account 没配置好
+                if "auth" in str(e).lower():
+                    st.info("提示：似乎是 Service Account 认证问题，请检查 Secrets 格式。")
                 
         except Exception as e:
             st.error(f"AI 对话失败，请检查 API 状态。错误详情: {e}")
