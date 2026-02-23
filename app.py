@@ -1,13 +1,15 @@
 import base64
 import json
+import traceback
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 import streamlit as st
 import google.generativeai as genai
 from datetime import datetime
 
 # =========================
-# 0) 固定配置
+# 0) 固定配置（你的 Google Sheet）
 # =========================
 SPREADSHEET_ID = "12xb05UFiwHE4gbfBMlmLmBmRvKmegpysk4JRutIF-Dw"
 SCOPES = [
@@ -16,7 +18,7 @@ SCOPES = [
 ]
 
 # =========================
-# 1) 认证 + 写入 Google Sheets（读 base64）
+# 1) 认证 + 写入 Google Sheets（读取 Secrets 里的 base64）
 # =========================
 @st.cache_resource
 def _get_gspread_client():
@@ -27,7 +29,7 @@ def _get_gspread_client():
     raw = base64.b64decode(b64).decode("utf-8")
     info = json.loads(raw)
 
-    # 保险：若 private_key 变成了 \\n，这里只在内存里修复
+    # 保险：如果 private_key 变成了 \\n，这里只在内存里修复
     if "private_key" in info and isinstance(info["private_key"], str):
         info["private_key"] = info["private_key"].replace("\\n", "\n").strip()
 
@@ -35,10 +37,26 @@ def _get_gspread_client():
     return gspread.authorize(creds)
 
 def append_row_to_sheet(row: list):
-    gc = _get_gspread_client()
-    sh = gc.open_by_key(SPREADSHEET_ID)
-    ws = sh.get_worksheet(0)  # 写第一个工作表（gid=0）
-    ws.append_row(row, value_input_option="RAW")
+    """
+    写入：Timestamp | Student_ID | Input | Output
+    返回 (ok: bool, err: str|None)
+    """
+    try:
+        gc = _get_gspread_client()
+        sh = gc.open_by_key(SPREADSHEET_ID)
+
+        # 更稳：直接写默认的第一个工作表
+        ws = sh.sheet1
+
+        ws.append_row(row, value_input_option="RAW")
+        return True, None
+
+    except APIError as e:
+        return False, f"APIError: {repr(e)}"
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        return False, f"{repr(e)}\n\nTRACEBACK:\n{tb}"
 
 # =========================
 # 2) Streamlit 页面
@@ -91,17 +109,18 @@ if prompt:
                 st.markdown(ai_reply)
                 st.session_state["messages"].append({"role": "assistant", "content": ai_reply})
 
-                # 写入表格：Timestamp | Student_ID | Input | Output
-                try:
-                    append_row_to_sheet([
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        student_id,
-                        prompt,
-                        ai_reply
-                    ])
+                ok, err = append_row_to_sheet([
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    student_id,
+                    prompt,
+                    ai_reply
+                ])
+
+                if ok:
                     st.toast("✅ 数据已同步至云端", icon="💾")
-                except Exception as sheet_err:
-                    st.error(f"写入表格失败：{sheet_err}")
+                else:
+                    st.error("写入表格失败（真实错误如下）:")
+                    st.code(err)
 
             except Exception as e:
                 st.error(f"AI 呼叫失败: {e}")
