@@ -2,59 +2,64 @@ import streamlit as st
 import google.generativeai as genai
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-import json
 from datetime import datetime
 
-st.set_page_config(page_title="数据同步诊断平台", layout="centered")
+# 1. 基础配置与学生ID获取
+st.set_page_config(page_title="语言协作研究平台", layout="centered")
+student_id = st.query_params.get("id", "Unknown_Student")
 
-# 1. 核心：解析钥匙并连接
-@st.cache_resource
-def get_conn():
-    try:
-        # 自动读取并修正 JSON 格式
-        raw_json = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
-        # 修正可能存在的双重转义
-        clean_json = raw_json.replace('\\\\n', '\\n')
-        creds = json.loads(clean_json)
-        
-        # 强制修正私钥中的换行符（这是解决 InvalidByte 的终极手段）
-        if "private_key" in creds:
-            creds["private_key"] = creds["creds"].get("private_key", "").replace("\\n", "\n")
-            
-        return st.connection("gsheets", type=GSheetsConnection, **creds)
-    except Exception as e:
-        st.error(f"❌ 认证初始化失败。请核对 Secrets 里的 JSON 字符串。详情: {e}")
-        return None
+st.title("🎓 语言学习与人机协作研究")
+st.markdown(f"**参与者编号：** `{student_id}`")
+st.divider()
 
-conn = get_conn()
+# 2. 初始化数据库连接
+conn = None
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error(f"数据库连接初始化失败: {e}")
 
-# 2. AI 模型配置
+# 3. AI 模型配置 (2026 旗舰版)
 if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('models/gemini-3-flash-preview')
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('models/gemini-3-flash-preview')
+    except Exception as e:
+        st.error(f"AI 模型加载失败: {e}")
 
-# 3. 互动逻辑
-if prompt := st.chat_input("输入内容进行同步测试..."):
-    st.chat_message("user").markdown(prompt)
+# 对话历史管理
+if "messages" not in st.session_state:
+    st.session_state["messages"] = []
+
+for msg in st.session_state["messages"]:
+    with st.chat_message(msg["role"]): st.markdown(msg["content"])
+
+# 4. 互动逻辑与存档
+if prompt := st.chat_input("在此输入翻译练习内容..."):
+    st.session_state["messages"].append({"role": "user", "content": prompt})
+    with st.chat_message("user"): st.markdown(prompt)
+
     with st.chat_message("assistant"):
-        response = model.generate_content(prompt)
-        ai_reply = response.text
-        st.markdown(ai_reply)
-        
-        # 4. 尝试同步
-        if conn is not None:
-            try:
-                # 按照表格表头：Timestamp, Student_ID, Input, Output
-                df = pd.DataFrame([{
-                    "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Student_ID": st.query_params.get("id", "Test_User"),
-                    "Input": prompt,
-                    "Output": ai_reply
-                }])
-                conn.create(data=df)
-                st.success("✅ 数据已同步至 Google Sheets")
-            except Exception as e:
-                # 这里的报错会告诉我们：是 API 没开，还是表格没分享给 Service Account 邮箱
-                st.warning(f"⚠️ 对话成功但存档失败。底层报错: {e}")
-                if "403" in str(e):
-                    st.info("提示：请检查是否已将表格分享给教学服务账号邮箱，并设为'编辑器'。")
+        try:
+            # 获取 AI 回复
+            response = model.generate_content(prompt)
+            ai_reply = response.text
+            st.markdown(ai_reply)
+            st.session_state["messages"].append({"role": "assistant", "content": ai_reply})
+            
+            # 自动存档逻辑
+            if conn is not None:
+                try:
+                    new_row = pd.DataFrame([{
+                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Student_ID": student_id,
+                        "Input": prompt,
+                        "Output": ai_reply
+                    }])
+                    conn.create(data=new_row)
+                    st.toast("✅ 数据已同步至云端语料库", icon='💾')
+                except Exception as sheet_err:
+                    st.error(f"⚠️ 写入表格失败，请确认表格已分享给 {st.secrets['connections']['gsheets']['client_email']}。错误: {sheet_err}")
+                    
+        except Exception as e:
+            st.error(f"AI 呼叫异常: {e}")
