@@ -25,13 +25,9 @@ if "GEMINI_API_KEY" in st.secrets:
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         model = genai.GenerativeModel(
-            model_name='models/gemini-2.0-flash', 
-            system_instruction=SYSTEM_PROMPT
-        )
-    except Exception as e:
-        st.error(f"模型配置失败: {e}")
-else:
-    st.error("未找到 API Key，请检查 Streamlit 后台 Secrets。")
+    model_name='models/gemini-3-flash-preview', 
+    system_instruction=SYSTEM_PROMPT
+)
 
 # --- 5. 显示聊天记录 ---
 for message in st.session_state["messages"]:
