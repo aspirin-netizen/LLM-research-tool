@@ -1,3 +1,4 @@
+import base64
 import json
 import gspread
 from google.oauth2.service_account import Credentials
@@ -6,7 +7,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # =========================
-# 0) 固定配置（无需你改）
+# 0) 固定配置
 # =========================
 SPREADSHEET_ID = "12xb05UFiwHE4gbfBMlmLmBmRvKmegpysk4JRutIF-Dw"
 SCOPES = [
@@ -15,19 +16,18 @@ SCOPES = [
 ]
 
 # =========================
-# 1) 认证 + 写入 Google Sheets（绕过 streamlit-gsheets & TOML 私钥坑）
+# 1) 认证 + 写入 Google Sheets（读 base64）
 # =========================
 @st.cache_resource
 def _get_gspread_client():
-    """
-    Secrets 里放：
-    GSHEETS_SA_JSON = \"\"\"{...整份service account json...}\"\"\"
-    不需要你改 \n
-    """
-    raw = st.secrets["GSHEETS_SA_JSON"]
+    b64 = st.secrets.get("GSHEETS_SA_JSON_B64", "")
+    if not b64:
+        raise RuntimeError('Secrets 缺少 "GSHEETS_SA_JSON_B64"（请在 App settings → Secrets 里添加）')
+
+    raw = base64.b64decode(b64).decode("utf-8")
     info = json.loads(raw)
 
-    # 保险：如果某些环境把换行弄成了 \\n，这里在内存中修复一次（不改 toml）
+    # 保险：若 private_key 变成了 \\n，这里只在内存里修复
     if "private_key" in info and isinstance(info["private_key"], str):
         info["private_key"] = info["private_key"].replace("\\n", "\n").strip()
 
@@ -35,20 +35,15 @@ def _get_gspread_client():
     return gspread.authorize(creds)
 
 def append_row_to_sheet(row: list):
-    """
-    直接写到第一个工作表（gid=0 对应的那一页）
-    表头：Timestamp | Student_ID | Input | Output
-    """
     gc = _get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_ID)
-    ws = sh.get_worksheet(0)  # 第一个 tab
+    ws = sh.get_worksheet(0)  # 写第一个工作表（gid=0）
     ws.append_row(row, value_input_option="RAW")
 
 # =========================
 # 2) Streamlit 页面
 # =========================
 st.set_page_config(page_title="语言协作实证平台", layout="centered")
-
 student_id = st.query_params.get("id", "Unknown_Student")
 
 st.title("🎓 语言学习与人机协作研究")
@@ -60,12 +55,12 @@ st.divider()
 # =========================
 model = None
 try:
-    if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        # 你原来用的模型名我保留；如报模型不存在，再改成你账户可用的
-        model = genai.GenerativeModel("models/gemini-3-flash-preview")
-    else:
+    api_key = st.secrets.get("GEMINI_API_KEY", "")
+    if not api_key:
         st.error("缺少 GEMINI_API_KEY（请在 Secrets 中添加）")
+    else:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("models/gemini-3-flash-preview")
 except Exception as e:
     st.error(f"AI 加载失败: {e}")
 
@@ -82,12 +77,10 @@ for msg in st.session_state["messages"]:
 prompt = st.chat_input("在此输入翻译内容...")
 
 if prompt:
-    # 显示用户输入
     st.session_state["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 生成并显示 AI 回复
     with st.chat_message("assistant"):
         if model is None:
             st.error("AI 模型未就绪，无法生成回复。")
@@ -98,15 +91,14 @@ if prompt:
                 st.markdown(ai_reply)
                 st.session_state["messages"].append({"role": "assistant", "content": ai_reply})
 
-                # 写入 Google Sheet（最稳的 gspread 方式）
+                # 写入表格：Timestamp | Student_ID | Input | Output
                 try:
-                    row = [
+                    append_row_to_sheet([
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         student_id,
                         prompt,
-                        ai_reply,
-                    ]
-                    append_row_to_sheet(row)
+                        ai_reply
+                    ])
                     st.toast("✅ 数据已同步至云端", icon="💾")
                 except Exception as sheet_err:
                     st.error(f"写入表格失败：{sheet_err}")
