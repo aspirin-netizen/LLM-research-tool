@@ -84,3 +84,29 @@ if prompt := st.chat_input("在此输入内容..."):
                 
         except Exception as e:
             st.error(f"AI 对话失败，请检查 API 状态。错误详情: {e}")
+# --- 升级后的数据存证逻辑 ---
+            try:
+                import traceback  # 引入追踪工具
+                
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                new_row = pd.DataFrame([{
+                    "Timestamp": timestamp,
+                    "Student_ID": student_id,
+                    "Input": prompt,
+                    "Output": ai_reply
+                }])
+                
+                # 尝试写入
+                conn.create(data=new_row)
+                st.toast("✅ 数据已存入表格", icon='💾')
+                
+            except Exception as e:
+                # 1. 显示简要说明
+                st.error("⚠️ 写入失败！")
+                # 2. 强行把报错的“内部细节”吐出来
+                error_details = traceback.format_exc()
+                with st.expander("点击查看完整技术报错（请截图发给我）"):
+                    st.code(error_details)
+                # 3. 提供常见原因提示
+                if "refresh token" in error_details.lower() or "auth" in error_details.lower():
+                    st.warning("提示：认证似乎失效了。请检查 Secrets 里的 private_key 格式。")
