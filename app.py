@@ -3,38 +3,39 @@ import google.generativeai as genai
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import traceback
 
-# --- 1. 页面基础配置 ---
+# --- 1. 页面配置 ---
 st.set_page_config(page_title="语言协作研究平台", layout="centered")
 
-# 从 URL 参数获取学生 ID
+# 获取学生 ID (用于您的 8 周实验分类)
 student_id = st.query_params.get("id", "Unknown_Student")
 
 st.title("🎓 语言学习与人机协作研究")
 st.markdown(f"**当前参与者：** {student_id}")
 st.divider()
 
-# --- 2. 实验核心变量：系统指令 ---
+# --- 2. 实验系统指令 ---
 SYSTEM_PROMPT = """
-你是一位专业的口译导师与人工智能语言协作专家。
-1. 请以专业、严谨且富有建设性的语气与学生交流。
-2. 当学生提交译文时，请从“逻辑连贯性”、“术语准确性”及“表达地道度”三个维度给出建议。
+你是一位专业的口译导师。
+1. 请针对译文的逻辑、术语和地道度提供反馈。
+2. 鼓励学生在协作中提出见解。
 """
 
 # --- 3. 状态初始化 ---
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
-# --- 4. 配置数据库与 AI 模型 ---
+# --- 4. 配置数据库与模型 ---
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-except Exception:
-    st.error("数据库初始化中...")
+except Exception as e:
+    st.error(f"数据库连接初始化失败: {e}")
 
 if "GEMINI_API_KEY" in st.secrets:
     try:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        # 使用您 2026 年可用的最新型号
+        # 使用您账户中确认可用的最新 3.0 模型
         model = genai.GenerativeModel(
             model_name='models/gemini-3-flash-preview', 
             system_instruction=SYSTEM_PROMPT
@@ -49,23 +50,22 @@ for message in st.session_state["messages"]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- 6. 核心互动与数据记录 ---
-if prompt := st.chat_input("在此输入内容..."):
-    # 显示用户输入
+# --- 6. 核心互动逻辑 ---
+if prompt := st.chat_input("在此输入翻译内容..."):
+    # 记录学生输入
     st.session_state["messages"].append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 获取 AI 回复并存入数据库
+    # 获取 AI 回复
     with st.chat_message("assistant"):
         try:
-            # 1. 呼叫 AI
             response = model.generate_content(prompt)
             ai_reply = response.text
             st.markdown(ai_reply)
             st.session_state["messages"].append({"role": "assistant", "content": ai_reply})
             
-    # 2. 尝试将数据存入 Google Sheets
+            # --- 数据记录深度调试区 ---
             try:
                 new_row = pd.DataFrame([{
                     "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -74,39 +74,12 @@ if prompt := st.chat_input("在此输入内容..."):
                     "Output": ai_reply
                 }])
                 conn.create(data=new_row)
-                st.toast("✅ 数据已同步至 Google Sheet")
-            except Exception as e:
-                # 使用 st.error 并加上详细的 str(e) 来查看具体病因
-                st.error(f"⚠️ 写入失败！具体原因：{str(e)}")
-                # 额外打印一下，看看是不是 Service Account 没配置好
-                if "auth" in str(e).lower():
-                    st.info("提示：似乎是 Service Account 认证问题，请检查 Secrets 格式。")
+                st.toast("💾 数据已成功同步至表格", icon='✅')
+            except Exception as sheet_err:
+                st.error("⚠️ 写入表格失败！")
+                # 展开显示详细报错，方便排查私钥格式问题
+                with st.expander("查看详细技术报错信息"):
+                    st.code(traceback.format_exc())
                 
-        except Exception as e:
-            st.error(f"AI 对话失败，请检查 API 状态。错误详情: {e}")
-# --- 升级后的数据存证逻辑 ---
-            try:
-                import traceback  # 引入追踪工具
-                
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                new_row = pd.DataFrame([{
-                    "Timestamp": timestamp,
-                    "Student_ID": student_id,
-                    "Input": prompt,
-                    "Output": ai_reply
-                }])
-                
-                # 尝试写入
-                conn.create(data=new_row)
-                st.toast("✅ 数据已存入表格", icon='💾')
-                
-            except Exception as e:
-                # 1. 显示简要说明
-                st.error("⚠️ 写入失败！")
-                # 2. 强行把报错的“内部细节”吐出来
-                error_details = traceback.format_exc()
-                with st.expander("点击查看完整技术报错（请截图发给我）"):
-                    st.code(error_details)
-                # 3. 提供常见原因提示
-                if "refresh token" in error_details.lower() or "auth" in error_details.lower():
-                    st.warning("提示：认证似乎失效了。请检查 Secrets 里的 private_key 格式。")
+        except Exception as ai_err:
+            st.error(f"AI 响应失败: {ai_err}")
